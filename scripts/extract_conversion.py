@@ -26,21 +26,37 @@ TARGET_METHODS = [
     "推荐词-前置页-AI搜",
 ]
 
-# 源 Excel 列映射: (输出列名, 源列索引1-based)
-FIELD_MAP = [
-    ("搜索pv", 4),
-    ("搜索uv", 5),
-    ("总提问条数", 7),
-    ("直接订单数", 56),
-]
+# 需要提取的字段名（与源 Excel 表头精确匹配，列位置可变）
+FIELD_NAMES = ["搜索pv", "搜索uv", "总提问条数", "直接订单数"]
 
-OUTPUT_HEADERS = ["日期", "搜索方式", "搜索pv", "搜索uv", "总提问条数", "直接订单数"]
+OUTPUT_HEADERS = ["日期", "搜索方式"] + FIELD_NAMES
+
+
+def build_col_index(ws):
+    """扫描表头行，返回 {列名: 1-based列索引}，兼容带前导空格的列名。"""
+    col_map = {}
+    for col in range(1, ws.max_column + 1):
+        val = ws.cell(1, col).value
+        if val is not None:
+            col_map[str(val).strip()] = col
+    return col_map
 
 
 def extract_data(src_path, date_start=None, date_end=None):
     """从源 Excel 读取数据，返回 [(date, method, pv, uv, tqs, ordn), ...]"""
     wb = openpyxl.load_workbook(src_path, data_only=True)
     ws = wb["日维度_搜索方式转化情况"]
+
+    col_map = build_col_index(ws)
+
+    # 检查所有必需列是否存在
+    missing = [f for f in FIELD_NAMES if f not in col_map]
+    if missing:
+        print("错误: 源 Excel 中缺少以下列: %s" % ", ".join(missing))
+        print("可用列: %s" % ", ".join(sorted(col_map.keys())))
+        sys.exit(1)
+
+    field_indices = [col_map[f] for f in FIELD_NAMES]
 
     target_set = set(TARGET_METHODS)
     rows = []
@@ -61,7 +77,7 @@ def extract_data(src_path, date_start=None, date_end=None):
             continue
 
         vals = []
-        for _, col_idx in FIELD_MAP:
+        for col_idx in field_indices:
             v = ws.cell(r, col_idx).value
             vals.append(v if v is not None else 0)
         rows.append((last_date, method, *vals))
@@ -98,7 +114,7 @@ def write_output(rows, out_path):
             cell.border = border
 
     # 列宽
-    widths = [12, 18, 10, 10, 12, 12]
+    widths = [12, 18, 12, 12, 12, 12]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -116,7 +132,7 @@ def main():
     date_end = sys.argv[3] if len(sys.argv) > 3 else None
 
     if not os.path.exists(src_path):
-        print(f"错误: 文件不存在 - {src_path}")
+        print("错误: 文件不存在 - %s" % src_path)
         sys.exit(1)
 
     rows = extract_data(src_path, date_start, date_end)
@@ -132,22 +148,23 @@ def main():
     dates = [r[0] for r in rows]
     d_min, d_max = min(dates), max(dates)
     if date_start or date_end:
-        name_range = f"{date_start or d_min}-{date_end or d_max}"
+        name_range = "%s-%s" % (date_start or d_min, date_end or d_max)
     else:
-        name_range = f"{d_min}-{d_max}"
+        name_range = "%s-%s" % (d_min, d_max)
 
     # 输出到 outputs 目录
     cwd = os.getcwd()
     out_dir = os.path.join(cwd, "outputs")
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, f"搜索方式转化情况_{name_range}.xlsx")
+    out_path = os.path.join(out_dir, "搜索方式转化情况_%s.xlsx" % name_range)
 
     write_output(rows, out_path)
 
-    print(f"已生成: {out_path}")
-    print(f"共 {len(rows)} 行数据 ({len(set(dates))} 天 × {len(TARGET_METHODS)} 种搜索方式)")
-    print(f"日期范围: {d_min} ~ {d_max}")
+    print("已生成: %s" % out_path)
+    print("共 %d 行数据 (%d 天 × %d 种搜索方式)" % (len(rows), len(set(dates)), len(TARGET_METHODS)))
+    print("日期范围: %s ~ %s" % (d_min, d_max))
 
 
 if __name__ == "__main__":
     main()
+
